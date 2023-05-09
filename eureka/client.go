@@ -4,24 +4,21 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
-	"github.com/sirupsen/logrus"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"time"
 	"strings"
+	"time"
 )
 
 const (
-	defaultBufferSize = 10
 	UP = "UP"
-	DOWN = "DOWN"
-	STARTING = "STARTING"
 )
 
 type Config struct {
@@ -50,8 +47,9 @@ type Client struct {
 	// Argument numReqs is the number of http.Requests that have been made so far.
 	// Argument lastResp is the http.Responses from the last request.
 	// Argument err is the reason of the failure.
-	CheckRetry  func(cluster *Cluster, numReqs int,
-	lastResp http.Response, err error) error
+	CheckRetry func(
+		cluster *Cluster, numReqs int,
+		lastResp http.Response, err error) error
 }
 
 // NewClient create a basic client that is configured to be used
@@ -126,7 +124,7 @@ func NewClientFromFile(fpath string) (*Client, error) {
 func NewClientFromReader(reader io.Reader) (*Client, error) {
 	c := new(Client)
 
-	b, err := ioutil.ReadAll(reader)
+	b, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +204,7 @@ func (c *Client) AddRootCA(caCert string) error {
 		return errors.New("Client has not been initialized yet!")
 	}
 
-	certBytes, err := ioutil.ReadFile(caCert)
+	certBytes, err := os.ReadFile(caCert)
 	if err != nil {
 		return err
 	}
@@ -260,12 +258,12 @@ func (c *Client) internalSyncCluster(machines []string) bool {
 			// try another machine in the cluster
 			continue
 		} else {
-			b, err := ioutil.ReadAll(resp.Body)
-			resp.Body.Close()
+			b, err := io.ReadAll(resp.Body)
 			if err != nil {
 				// try another machine in the cluster
 				continue
 			}
+			resp.Body.Close()
 
 			// update Machines List
 			c.Cluster.updateFromStr(string(b))
@@ -274,7 +272,7 @@ func (c *Client) internalSyncCluster(machines []string) bool {
 			// the first one in the machine list is the leader
 			c.Cluster.switchLeader(0)
 
-			logrus.Debug("sync.machines " + strings.Join(c.Cluster.Machines, ", "))
+			_debugf("sync.machines %s", strings.Join(c.Cluster.Machines, ", "))
 			return true
 		}
 	}
@@ -325,13 +323,14 @@ func (c *Client) dial(network, addr string) (net.Conn, error) {
 // MarshalJSON implements the Marshaller interface
 // as defined by the standard JSON package.
 func (c *Client) MarshalJSON() ([]byte, error) {
-	b, err := json.Marshal(struct {
-		Config  Config   `json:"config"`
-		Cluster *Cluster `json:"cluster"`
-	}{
-		Config:  c.Config,
-		Cluster: c.Cluster,
-	})
+	b, err := json.Marshal(
+		struct {
+			Config  Config   `json:"config"`
+			Cluster *Cluster `json:"cluster"`
+		}{
+			Config:  c.Config,
+			Cluster: c.Cluster,
+		})
 
 	if err != nil {
 		return nil, err
@@ -355,4 +354,135 @@ func (c *Client) UnmarshalJSON(b []byte) error {
 	c.Cluster = temp.Cluster
 	c.Config = temp.Config
 	return nil
+}
+
+// RegisterInstance
+// Register new application instance
+func (c *Client) RegisterInstance(appId string, instanceInfo *InstanceInfo) error {
+	instance := &Instance{
+		Instance: instanceInfo,
+	}
+
+	body, err := json.Marshal(instance)
+	if err != nil {
+		return fmt.Errorf("cannot serialize request body: %w", err)
+	}
+
+	resp, err := c.Post("apps/"+appId, body)
+	if err != nil {
+		return fmt.Errorf("cannot register application's [appId=%s] instance: %w", appId, err)
+	}
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("cannot register application's [appId=%s] instance: unexpected code: %d", appId, resp.StatusCode)
+	}
+	return nil
+}
+
+// UnregisterInstance De-register application instance
+func (c *Client) UnregisterInstance(appId, instanceId string) error {
+	resp, err := c.Delete("apps/" + appId + "/" + instanceId)
+	if err != nil {
+		return fmt.Errorf("cannot de-register application [appId=%s] instance [instanceId=%s]: %w", appId, instanceId, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf(
+			"cannot de-register application [appId=%s] instance [instanceId=%s]: unexpected code: %d",
+			appId,
+			instanceId,
+			resp.StatusCode,
+		)
+	}
+	return err
+}
+
+// SendHeartbeat Send application instance heartbeat
+func (c *Client) SendHeartbeat(appId, instanceId string) error {
+	resp, err := c.Put("apps/"+appId+"/"+instanceId, nil)
+	if err != nil {
+		return err
+	}
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return newError(
+			ErrCodeInstanceNotFound,
+			"Instance resource not found when sending heartbeat", 0)
+	}
+	return nil
+}
+
+// GetApplications Query for all instances
+func (c *Client) GetApplications() (*Applications, error) {
+	resp, err := c.Get("apps")
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve applications: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot retrieve applications: unexpected code: %d", resp.StatusCode)
+	}
+	var applications Applications
+	err = xml.Unmarshal(resp.Body, &applications)
+	return &applications, err
+}
+
+// GetApplication Query for all appID instances
+func (c *Client) GetApplication(appId string) (*Application, error) {
+	resp, err := c.Get("apps/" + appId)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve application [appId=%s]: %w", appId, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot retrieve application [appId=%s]: unexpected code: %d", appId, resp.StatusCode)
+	}
+	var application *Application = new(Application)
+	err = xml.Unmarshal(resp.Body, application)
+	return application, err
+}
+
+// GetInstance Query for a specific appID/instanceID
+func (c *Client) GetInstance(appId, instanceId string) (*InstanceInfo, error) {
+	resp, err := c.Get("apps/" + appId + "/" + instanceId)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve application's [appId=%s] instance [instanceId=%s]: %w", appId, instanceId, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"cannot retrieve application's [appId=%s] instance [instanceId=%s]: unexpected code: %d",
+			appId,
+			instanceId,
+			resp.StatusCode)
+	}
+	var instance InstanceInfo
+	err = xml.Unmarshal(resp.Body, &instance)
+	return &instance, err
+}
+
+// GetVIP Query for all instances under a particular vip address
+func (c *Client) GetVIP(vipAddress string) (*Applications, error) {
+	resp, err := c.Get("vips/" + vipAddress)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve instances for vipAddress='%s': %w", vipAddress, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot retrieve instances for vipAddress='%s': unexpected code: %d", vipAddress, resp.StatusCode)
+	}
+	var applications Applications
+	err = xml.Unmarshal(resp.Body, &applications)
+	return &applications, err
+}
+
+// GetSVIP Query for all instances under a particular secure vip address
+func (c *Client) GetSVIP(svipAddress string) (*Applications, error) {
+	resp, err := c.Get("svips/" + svipAddress)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve instances for secure virtual IP address '%s': %w", svipAddress, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot retrieve instances for secure virtual IP address '%s': unexpected code: %d", svipAddress, resp.StatusCode)
+	}
+	var applications *Applications = new(Applications)
+	err = xml.Unmarshal(resp.Body, applications)
+	return applications, err
 }

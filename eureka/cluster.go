@@ -1,7 +1,6 @@
 package eureka
 
 import (
-	"github.com/sirupsen/logrus"
 	"net/url"
 	"strings"
 )
@@ -26,8 +25,7 @@ func NewCluster(machines []string) *Cluster {
 
 // switchLeader switch the current leader to machines[num]
 func (cl *Cluster) switchLeader(num int) {
-	logrus.Debugf("switch.leader[from %v to %v]",
-		cl.Leader, cl.Machines[num])
+	_debugf("switch.leader[from %v to %v]", cl.Leader, cl.Machines[num])
 
 	cl.Leader = cl.Machines[num]
 }
@@ -37,7 +35,7 @@ func (cl *Cluster) updateFromStr(machines string) {
 }
 
 func (cl *Cluster) updateLeader(leader string) {
-	logrus.Debugf("update.leader[%s,%s]", cl.Leader, leader)
+	_debugf("update.leader[%s,%s]", cl.Leader, leader)
 	cl.Leader = leader
 }
 

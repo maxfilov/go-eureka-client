@@ -3,13 +3,9 @@ package eureka
 import (
 	"bytes"
 	"errors"
-	"fmt"
-	"github.com/sirupsen/logrus"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -122,7 +118,7 @@ func NewInstanceInfo(hostName, app, ip string, port int, ttl uint, isSsl bool) *
 		LeaseInfo:      leaseInfo,
 		Metadata:       nil,
 	}
-	stringPort := ""
+	var stringPort string = ""
 	if port != 80 && port != 443 {
 		stringPort = ":" + strconv.Itoa(port)
 	}
@@ -146,9 +142,10 @@ func NewInstanceInfo(hostName, app, ip string, port int, ttl uint, isSsl bool) *
 }
 
 // getCancelable issues a cancelable GET request
-func (c *Client) getCancelable(endpoint string,
+func (c *Client) getCancelable(
+	endpoint string,
 	cancel <-chan bool) (*RawResponse, error) {
-	logrus.Debugf("get %s [%s]", endpoint, c.Cluster.Leader)
+	_debugf("get %s [%s]", endpoint, c.Cluster.Leader)
 	p := endpoint
 
 	req := NewRawRequest("GET", p, nil, cancel)
@@ -169,7 +166,7 @@ func (c *Client) Get(endpoint string) (*RawResponse, error) {
 // put issues a PUT request
 func (c *Client) Put(endpoint string, body []byte) (*RawResponse, error) {
 
-	logrus.Debugf("put %s, %s, [%s]", endpoint, body, c.Cluster.Leader)
+	_debugf("put %s, %s, [%s]", endpoint, body, c.Cluster.Leader)
 	p := endpoint
 
 	req := NewRawRequest("PUT", p, body, nil)
@@ -184,7 +181,7 @@ func (c *Client) Put(endpoint string, body []byte) (*RawResponse, error) {
 
 // post issues a POST request
 func (c *Client) Post(endpoint string, body []byte) (*RawResponse, error) {
-	logrus.Debugf("post %s, %s, [%s]", endpoint, body, c.Cluster.Leader)
+	_debugf("post %s, %s, [%s]", endpoint, body, c.Cluster.Leader)
 	p := endpoint
 
 	req := NewRawRequest("POST", p, body, nil)
@@ -199,7 +196,7 @@ func (c *Client) Post(endpoint string, body []byte) (*RawResponse, error) {
 
 // delete issues a DELETE request
 func (c *Client) Delete(endpoint string) (*RawResponse, error) {
-	logrus.Debugf("delete %s [%s]", endpoint, c.Cluster.Leader)
+	_debugf("delete %s [%s]", endpoint, c.Cluster.Leader)
 	p := endpoint
 
 	req := NewRawRequest("DELETE", p, nil, nil)
@@ -238,7 +235,7 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 			select {
 			case <-rr.cancel:
 				cancelled <- true
-				logrus.Debug("send.request is cancelled")
+				_debugf("send.request is cancelled")
 			case <-cancelRoutine:
 				return
 			}
@@ -277,11 +274,11 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 			}
 		}
 
-		logrus.Debugf("Connecting to eureka: attempt %d for %s", attempt+1, rr.relativePath)
+		_debugf("Connecting to eureka: attempt %d for %s", attempt+1, rr.relativePath)
 
 		httpPath = c.getHttpPath(false, rr.relativePath)
 
-		logrus.Debugf("send.request.to %s | method %s", httpPath, rr.method)
+		_debugf("send.request.to %s | method %s", httpPath, rr.method)
 
 		req, err := func() (*http.Request, error) {
 			reqLock.Lock()
@@ -291,7 +288,8 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 				return nil, err
 			}
 
-			req.Header.Set("Content-Type",
+			req.Header.Set(
+				"Content-Type",
 				"application/json")
 			return req, nil
 		}()
@@ -318,7 +316,7 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 
 		// network error, change a machine!
 		if err != nil {
-			logrus.Errorf("network error: %v", err.Error())
+			_errorf("network error: %v", err.Error())
 			lastResp := http.Response{}
 			if checkErr := checkRetry(c.Cluster, numReqs, lastResp, err); checkErr != nil {
 				return nil, checkErr
@@ -329,13 +327,13 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 		}
 
 		// if there is no error, it should receive response
-		logrus.Debug("recv.response.from " + httpPath)
+		_debugf("recv.response.from %s", httpPath)
 
 		if validHttpStatusCode[resp.StatusCode] {
 			// try to read byte code and break the loop
-			respBody, err = ioutil.ReadAll(resp.Body)
+			respBody, err = io.ReadAll(resp.Body)
 			if err == nil {
-				logrus.Debug("recv.success " + httpPath)
+				_debugf("recv.success %s", httpPath)
 				break
 			}
 			// ReadAll error may be caused due to cancel request
@@ -360,18 +358,19 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 			u, err := resp.Location()
 
 			if err != nil {
-				logrus.Warningf("%v", err)
+				_warningf("%v", err)
 			} else {
 				// Update cluster leader based on redirect location
 				// because it should point to the leader address
 				c.Cluster.updateLeaderFromURL(u)
-				logrus.Debug("recv.response.relocate " + u.String())
+				_debugf("recv.response.relocate %s", u.String())
 			}
 			resp.Body.Close()
 			continue
 		}
 
-		if checkErr := checkRetry(c.Cluster, numReqs, *resp,
+		if checkErr := checkRetry(
+			c.Cluster, numReqs, *resp,
 			errors.New("Unexpected HTTP status code")); checkErr != nil {
 			return nil, checkErr
 		}
@@ -390,11 +389,13 @@ func (c *Client) SendRequest(rr *RawRequest) (*RawResponse, error) {
 // DefaultCheckRetry defines the retrying behaviour for bad HTTP requests
 // If we have retried 2 * machine number, stop retrying.
 // If status code is InternalServerError, sleep for 200ms.
-func DefaultCheckRetry(cluster *Cluster, numReqs int, lastResp http.Response,
-	err error) error {
+func DefaultCheckRetry(
+	cluster *Cluster, numReqs int, lastResp http.Response,
+	_ error) error {
 
 	if numReqs >= 2*len(cluster.Machines) {
-		return newError(ErrCodeEurekaNotReachable,
+		return newError(
+			ErrCodeEurekaNotReachable,
 			"Tried to connect to each peer twice and failed", 0)
 	}
 
@@ -404,7 +405,7 @@ func DefaultCheckRetry(cluster *Cluster, numReqs int, lastResp http.Response,
 
 	}
 
-	logrus.Warningf("bad response status code %d", code)
+	_warningf("bad response status code %d", code)
 	return nil
 }
 
@@ -422,19 +423,4 @@ func (c *Client) getHttpPath(random bool, s ...string) string {
 	}
 
 	return fullPath
-}
-
-// buildValues builds a url.Values map according to the given value and ttl
-func buildValues(value string, ttl uint64) url.Values {
-	v := url.Values{}
-
-	if value != "" {
-		v.Set("value", value)
-	}
-
-	if ttl > 0 {
-		v.Set("ttl", fmt.Sprintf("%v", ttl))
-	}
-
-	return v
 }
