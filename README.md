@@ -3,6 +3,8 @@ Go Eureka Client
 
 Based on code from https://github.com/bryanstephens/go-eureka-client .
 
+Despite the fact that this fork is close to the original, it's _not a drop-in replacement_. 
+
 ## Getting started
 
 ```go
