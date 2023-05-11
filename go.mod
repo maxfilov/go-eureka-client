@@ -1,3 +1,3 @@
-module github.com/maxfilov/go-eureka-client/v2
+module github.com/maxfilov/go-eureka-client
 
 go 1.12
