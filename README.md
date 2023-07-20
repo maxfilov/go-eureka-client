@@ -1,7 +1,9 @@
 Go Eureka Client
 ================
 
-Based on code from https://github.com/bryanstephens/go-eureka-client .
+Based on code from https://github.com/bryanstephens/go-eureka-client.
+
+This fork exists only because the original one was abandoned.
 
 Despite the fact that this fork is close to the original, it's _not a drop-in replacement_. 
 
